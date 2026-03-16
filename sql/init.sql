@@ -1,51 +1,80 @@
--- LoveType 데이터베이스 초기화
+-- LoveType DB init.sql
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE IF NOT EXISTS mbti_results (
-  id SERIAL PRIMARY KEY,
-  session_id VARCHAR(64) NOT NULL,
-  ip_hash VARCHAR(64) NOT NULL,
-  mbti_type VARCHAR(4) NOT NULL,
-  scores JSONB NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- 1. 세션 로그
+CREATE TABLE IF NOT EXISTS svil_sessions (
+  id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  app_id               VARCHAR(30)   NOT NULL,
+  session_id           VARCHAR(64)   NOT NULL,
+  ip_hash              VARCHAR(64)   NOT NULL,
+  country              VARCHAR(10),
+  referrer             VARCHAR(255),
+  referrer_type        VARCHAR(30),
+  device_type          VARCHAR(20),
+  user_agent_summary   VARCHAR(100),
+  created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  date_kst             DATE          NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_sessions_app_date   ON svil_sessions(app_id, date_kst);
+CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON svil_sessions(session_id);
 
-CREATE TABLE IF NOT EXISTS compatibility_cache (
-  id SERIAL PRIMARY KEY,
-  type_a VARCHAR(4) NOT NULL,
-  type_b VARCHAR(4) NOT NULL,
-  result_text TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(type_a, type_b)
+-- 2. 행동 이벤트
+CREATE TABLE IF NOT EXISTS svil_events (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id   VARCHAR(64)   NOT NULL,
+  app_id       VARCHAR(30)   NOT NULL,
+  event_type   VARCHAR(50)   NOT NULL,
+  event_value  VARCHAR(255),
+  step         INTEGER,
+  created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_events_session   ON svil_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_app_type  ON svil_events(app_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_events_created   ON svil_events(created_at);
 
-CREATE TABLE IF NOT EXISTS events (
-  id SERIAL PRIMARY KEY,
-  session_id VARCHAR(64),
-  ip_hash VARCHAR(64),
-  event_type VARCHAR(64) NOT NULL,
-  payload JSONB,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- 3. MBTI 결과 저장 + 하루 제한
+CREATE TABLE IF NOT EXISTS svil_results (
+  id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  app_id               VARCHAR(30)   NOT NULL,
+  session_id           VARCHAR(64)   NOT NULL,
+  cache_key            VARCHAR(128)  NOT NULL,
+  mbti                 VARCHAR(4)    NOT NULL,
+  axis_strength        JSONB         NOT NULL,
+  result_data          JSONB,
+  compatibility_data   JSONB,
+  created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  date_kst             DATE          NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_results_session_date ON svil_results(session_id, app_id, date_kst);
+CREATE INDEX IF NOT EXISTS idx_results_cache_key    ON svil_results(cache_key);
+CREATE INDEX IF NOT EXISTS idx_results_mbti         ON svil_results(mbti);
 
-CREATE TABLE IF NOT EXISTS daily_stats (
-  id SERIAL PRIMARY KEY,
-  stat_date DATE NOT NULL DEFAULT CURRENT_DATE,
-  mbti_type VARCHAR(4),
-  count INTEGER DEFAULT 0,
-  UNIQUE(stat_date, mbti_type)
+-- 4. 일별 집계
+CREATE TABLE IF NOT EXISTS svil_stats_daily (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  app_id            VARCHAR(30)   NOT NULL,
+  date_kst          DATE          NOT NULL,
+  total_sessions    INTEGER       NOT NULL DEFAULT 0,
+  test_starts       INTEGER       NOT NULL DEFAULT 0,
+  test_completes    INTEGER       NOT NULL DEFAULT 0,
+  tarot_cta_clicks  INTEGER       NOT NULL DEFAULT 0,
+  shares            INTEGER       NOT NULL DEFAULT 0,
+  top_mbti          VARCHAR(4)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stats_daily_unique ON svil_stats_daily(app_id, date_kst);
 
-CREATE TABLE IF NOT EXISTS rate_limits (
-  id SERIAL PRIMARY KEY,
-  ip_hash VARCHAR(64) NOT NULL,
-  endpoint VARCHAR(128) NOT NULL,
-  request_count INTEGER DEFAULT 1,
-  window_start TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(ip_hash, endpoint)
+-- 5. AI 궁합 캐시 (256개 조합)
+CREATE TABLE IF NOT EXISTS svil_compatibility_cache (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  app_id         VARCHAR(30)   NOT NULL,
+  cache_key      VARCHAR(128)  NOT NULL,
+  mbti           VARCHAR(4)    NOT NULL,
+  axis_strength  JSONB         NOT NULL,
+  result_data    JSONB         NOT NULL,
+  slot           SMALLINT      NOT NULL DEFAULT 1,
+  created_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
-
-CREATE INDEX IF NOT EXISTS idx_mbti_results_ip_hash ON mbti_results(ip_hash);
-CREATE INDEX IF NOT EXISTS idx_mbti_results_created_at ON mbti_results(created_at);
-CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
-CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
-CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(stat_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_compat_cache_key_slot ON svil_compatibility_cache(app_id, cache_key, slot);
+CREATE INDEX IF NOT EXISTS idx_compat_cache_key ON svil_compatibility_cache(app_id, cache_key);
+CREATE INDEX IF NOT EXISTS idx_compat_mbti      ON svil_compatibility_cache(mbti);
