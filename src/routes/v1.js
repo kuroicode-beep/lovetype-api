@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../db');
 const { generateTarotStory } = require('../services/tarotAi');
@@ -20,8 +20,9 @@ const PRODUCT_CREDITS = {
 function themeToCategory(theme) {
   if (!theme) return 'other';
   const t = String(theme);
-  if (t.includes('?곗븷')) return 'romance';
-  if (t.includes('?ㅻ뒛')) return 'daily';
+  // Unicode escapes — avoid source file encoding issues on Windows
+  if (t.includes('\uC5F0\uC560') || /romance/i.test(t)) return 'romance';
+  if (t.includes('\uC624\uB298') || /daily/i.test(t)) return 'daily';
   return 'other';
 }
 
@@ -63,7 +64,7 @@ function requireAdmin(req, res) {
   return true;
 }
 
-// ?? 1 쨌 8: ?덉뒪?좊━ ?????????????????????????????????????????
+// Tarot reading history (POST save, GET list)
 router.post('/tarot/history', async (req, res) => {
   const {
     app_id,
@@ -79,7 +80,7 @@ router.post('/tarot/history', async (req, res) => {
 
   if (app_id !== TAROT_APP_ID || !user_id || !story) {
     return res.status(400).json({
-      error: 'app_id(lovetype-tarot), user_id, story ?꾩닔',
+      error: 'app_id(lovetype-tarot), user_id, story required',
     });
   }
 
@@ -127,7 +128,7 @@ router.post('/tarot/history', async (req, res) => {
 router.get('/tarot/history', async (req, res) => {
   const { app_id, user_id, limit = '20' } = req.query;
   if (app_id !== TAROT_APP_ID || !user_id) {
-    return res.status(400).json({ error: 'app_id, user_id ?꾩닔' });
+    return res.status(400).json({ error: 'app_id, user_id required' });
   }
   const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
 
@@ -160,11 +161,11 @@ router.get('/tarot/history', async (req, res) => {
   }
 });
 
-// ?? 7: 荑⑦??????????????????????????????????????????????????
+// Cooldown status
 router.get('/tarot/cooltime', async (req, res) => {
   const { app_id, user_id, theme } = req.query;
   if (app_id !== TAROT_APP_ID || !user_id) {
-    return res.status(400).json({ error: 'app_id, user_id ?꾩닔' });
+    return res.status(400).json({ error: 'app_id, user_id required' });
   }
   const cat = themeToCategory(theme);
   if (cat !== 'daily' && cat !== 'romance') {
@@ -196,11 +197,11 @@ router.get('/tarot/cooltime', async (req, res) => {
   }
 });
 
-// ?? ?濡?由щ뵫 (Flutter POST /api/v1/tarot) ?????????????????
+// AI tarot story (Flutter POST /api/v1/tarot)
 router.post('/tarot', async (req, res) => {
   const { app_id, prompt } = req.body;
   if (!prompt) {
-    return res.status(400).json({ error: 'prompt ?꾩닔' });
+    return res.status(400).json({ error: 'prompt required' });
   }
   if (app_id && app_id !== TAROT_APP_ID) {
     return res.status(400).json({ error: 'unsupported app_id' });
@@ -214,11 +215,11 @@ router.post('/tarot', async (req, res) => {
   }
 });
 
-// ?? 2: ?붿븸 ?????????????????????????????????????????????????
+// Payment balance
 router.get('/payment/balance', async (req, res) => {
   const { app_id, user_id } = req.query;
   if (app_id !== TAROT_APP_ID || !user_id) {
-    return res.status(400).json({ error: 'app_id, user_id ?꾩닔' });
+    return res.status(400).json({ error: 'app_id, user_id required' });
   }
 
   const client = await pool.connect();
@@ -240,11 +241,11 @@ router.get('/payment/balance', async (req, res) => {
   }
 });
 
-// ?? 3: 李④컧 ?????????????????????????????????????????????????
+// Payment use (deduct)
 router.post('/payment/use', async (req, res) => {
   const { app_id, user_id, amount, reason } = req.body;
   if (app_id !== TAROT_APP_ID || !user_id || amount == null) {
-    return res.status(400).json({ error: 'app_id, user_id, amount ?꾩닔' });
+    return res.status(400).json({ error: 'app_id, user_id, amount required' });
   }
   const n = Number(amount);
   if (!Number.isFinite(n) || n < 0) {
@@ -280,11 +281,11 @@ router.post('/payment/use', async (req, res) => {
   }
 });
 
-// ?? 5: 異⑹쟾 ?????????????????????????????????????????????????
+// Payment charge
 router.post('/payment/charge', async (req, res) => {
   const { app_id, user_id, amount, product_id, receipt } = req.body;
   if (app_id !== TAROT_APP_ID || !user_id || !product_id) {
-    return res.status(400).json({ error: 'app_id, user_id, product_id ?꾩닔' });
+    return res.status(400).json({ error: 'app_id, user_id, product_id required' });
   }
 
   const client = await pool.connect();
@@ -340,11 +341,11 @@ router.post('/payment/charge', async (req, res) => {
   }
 });
 
-// ?? 4: Google 濡쒓렇??????????????????????????????????????????
+// Google sign-in
 router.post('/auth/google', async (req, res) => {
   const { app_id, id_token, soul_card, nickname, gender, mbti } = req.body;
   if (app_id !== TAROT_APP_ID || !id_token) {
-    return res.status(400).json({ error: 'app_id(lovetype-tarot), id_token ?꾩닔' });
+    return res.status(400).json({ error: 'app_id(lovetype-tarot), id_token required' });
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -361,8 +362,8 @@ router.post('/auth/google', async (req, res) => {
       console.error('[v1 auth/google] verify fail', e.message);
       return res.status(401).json({ error: 'invalid_id_token' });
     }
-  } else {
-    console.warn('[v1 auth/google] GOOGLE_CLIENT_ID ?놁쓬 ??媛쒕컻??JWT sub 異붿텧');
+  } else if (process.env.NODE_ENV !== 'production') {
+    console.warn('[v1 auth/google] GOOGLE_CLIENT_ID unset — dev-only JWT payload parse');
     try {
       const parts = id_token.split('.');
       if (parts.length < 2) throw new Error('bad jwt');
@@ -374,6 +375,8 @@ router.post('/auth/google', async (req, res) => {
     } catch (e) {
       return res.status(401).json({ error: 'invalid_id_token' });
     }
+  } else {
+    return res.status(503).json({ error: 'google_auth_not_configured' });
   }
 
   const client = await pool.connect();
@@ -423,11 +426,11 @@ router.post('/auth/google', async (req, res) => {
   }
 });
 
-// ?? 6: FCM ?깅줉 ?????????????????????????????????????????????
+// FCM token register
 router.post('/push/register', async (req, res) => {
   const { app_id, user_id, fcm_token } = req.body;
   if (app_id !== TAROT_APP_ID || !user_id || !fcm_token) {
-    return res.status(400).json({ error: 'app_id, user_id, fcm_token ?꾩닔' });
+    return res.status(400).json({ error: 'app_id, user_id, fcm_token required' });
   }
   try {
     await pool.query(
@@ -444,14 +447,14 @@ router.post('/push/register', async (req, res) => {
   }
 });
 
-// ?? 9: ?몄떆 諛쒖넚 (?대뱶誘? ???????????????????????????????????
+// Push send (admin)
 router.post('/push/send', async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
   const { app_id, title, body, target } = req.body;
   if (app_id !== TAROT_APP_ID || !title || !body || !target) {
     return res.status(400).json({
-      error: 'app_id(lovetype-tarot), title, body, target ?꾩닔',
+      error: 'app_id(lovetype-tarot), title, body, target required',
     });
   }
 
@@ -501,4 +504,5 @@ router.post('/push/send', async (req, res) => {
     res.status(500).json({ error: 'internal_error', message: err.message });
   }
 });
+
 module.exports = router;
