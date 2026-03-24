@@ -4,10 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node scripts/migrate.js && node src/index.js",
     "dev": "nodemon src/index.js",
-    "db:init": "psql $DATABASE_URL -f sql/init.sql",
-    "db:tarot": "psql $DATABASE_URL -f sql/tarot_v1.sql"
+    "db:init": "node scripts/migrate.js sql/init.sql",
+    "db:tarot": "node scripts/migrate.js"
   },
   "keywords": [],
   "author": "",
