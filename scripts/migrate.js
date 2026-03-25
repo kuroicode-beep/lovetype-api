@@ -4,14 +4,18 @@ const { Client } = require("pg");
 
 require("dotenv").config();
 
-function resolveSqlPath() {
+function resolveSqlPaths() {
   const argPath = process.argv[2];
-  if (!argPath) {
-    return path.resolve(__dirname, "..", "sql", "tarot_v1.sql");
+  if (argPath) {
+    const p = path.isAbsolute(argPath)
+      ? argPath
+      : path.resolve(__dirname, "..", argPath);
+    return [p];
   }
-  return path.isAbsolute(argPath)
-    ? argPath
-    : path.resolve(__dirname, "..", argPath);
+  const sqlDir = path.resolve(__dirname, "..", "sql");
+  return ["tarot_v1.sql", "tarot_settings.sql"].map((f) =>
+    path.join(sqlDir, f)
+  );
 }
 
 async function main() {
@@ -20,31 +24,32 @@ async function main() {
     throw new Error("DATABASE_URL is not set");
   }
 
-  const sqlPath = resolveSqlPath();
-  if (!fs.existsSync(sqlPath)) {
-    throw new Error(`SQL file not found: ${sqlPath}`);
-  }
+  const sqlPaths = resolveSqlPaths();
+  for (const sqlPath of sqlPaths) {
+    if (!fs.existsSync(sqlPath)) {
+      throw new Error(`SQL file not found: ${sqlPath}`);
+    }
+    const sql = fs.readFileSync(sqlPath, "utf8");
+    if (!sql.trim()) {
+      throw new Error(`SQL file is empty: ${sqlPath}`);
+    }
 
-  const sql = fs.readFileSync(sqlPath, "utf8");
-  if (!sql.trim()) {
-    throw new Error(`SQL file is empty: ${sqlPath}`);
-  }
+    const client = new Client({
+      connectionString: databaseUrl,
+      ssl: databaseUrl.includes("railway.app")
+        ? { rejectUnauthorized: false }
+        : undefined,
+    });
 
-  const client = new Client({
-    connectionString: databaseUrl,
-    ssl: databaseUrl.includes("railway.app")
-      ? { rejectUnauthorized: false }
-      : undefined,
-  });
-
-  console.log(`[migrate] applying: ${sqlPath}`);
-  await client.connect();
-  try {
-    await client.query(sql);
-    console.log("[migrate] done");
-  } finally {
-    await client.end();
+    console.log(`[migrate] applying: ${sqlPath}`);
+    await client.connect();
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
   }
+  console.log("[migrate] done");
 }
 
 main().catch((err) => {

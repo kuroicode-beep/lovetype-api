@@ -9,6 +9,27 @@ const router = express.Router();
 const TAROT_APP_ID = 'lovetype-tarot';
 const COOLDOWN_SEC = 3600;
 
+async function getTarotSettings() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT cooldown_daily_sec, cooldown_romance_sec,
+              deck_basic_enabled, deck_low_vision_enabled, deck_webtoon_enabled
+       FROM lovetype_tarot_settings WHERE app_id = $1`,
+      [TAROT_APP_ID]
+    );
+    if (rows.length) return rows[0];
+  } catch (err) {
+    console.warn('[getTarotSettings]', err.message);
+  }
+  return {
+    cooldown_daily_sec: COOLDOWN_SEC,
+    cooldown_romance_sec: COOLDOWN_SEC,
+    deck_basic_enabled: true,
+    deck_low_vision_enabled: true,
+    deck_webtoon_enabled: true,
+  };
+}
+
 const PRODUCT_CREDITS = {
   tarot_10p: 10,
   tarot_1: 1,
@@ -181,9 +202,14 @@ router.get('/tarot/cooltime', async (req, res) => {
     if (!rows.length) {
       return res.json({ available: true, remaining_seconds: 0 });
     }
+    const settings = await getTarotSettings();
+    const cooldownSec =
+      cat === 'daily'
+        ? settings.cooldown_daily_sec
+        : settings.cooldown_romance_sec;
     const last = new Date(rows[0].last_at).getTime();
     const elapsed = (Date.now() - last) / 1000;
-    const remaining = COOLDOWN_SEC - elapsed;
+    const remaining = cooldownSec - elapsed;
     if (remaining <= 0) {
       return res.json({ available: true, remaining_seconds: 0 });
     }
@@ -320,6 +346,15 @@ router.post('/payment/charge', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    try {
+      await client.query(
+        `INSERT INTO lovetype_tarot_charge_log (app_id, user_id, product_id, is_subscription)
+         VALUES ($1, $2, $3, $4)`,
+        [app_id, user_id, product_id, product_id === 'tarot_sub']
+      );
+    } catch (logErr) {
+      console.warn('[payment/charge] charge_log', logErr.message);
+    }
     const row = await getWalletRow(client, app_id, user_id);
     if (receipt) {
       console.log('[payment/charge] receipt length', String(receipt).length);
@@ -443,6 +478,180 @@ router.post('/push/register', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('[v1 push/register]', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// --- Admin API (header: X-Admin-Key) ---
+router.get('/admin/stats', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { rows: tc } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM lovetype_tarot_readings WHERE app_id = $1`,
+      [TAROT_APP_ID]
+    );
+    const { rows: uc } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM lovetype_tarot_users WHERE app_id = $1`,
+      [TAROT_APP_ID]
+    );
+    const { rows: pc } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM lovetype_tarot_push WHERE app_id = $1`,
+      [TAROT_APP_ID]
+    );
+    const { rows: sc } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM lovetype_tarot_wallet
+       WHERE app_id = $1 AND is_subscribed = TRUE
+         AND (sub_expires_at IS NULL OR sub_expires_at > NOW())`,
+      [TAROT_APP_ID]
+    );
+    const { rows: romanceC } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM lovetype_tarot_readings
+       WHERE app_id = $1 AND (
+         theme ILIKE '%연애%' OR LOWER(COALESCE(theme,'')) LIKE '%romance%'
+       )`,
+      [TAROT_APP_ID]
+    );
+    const { rows: dailyC } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM lovetype_tarot_readings
+       WHERE app_id = $1 AND (
+         theme ILIKE '%오늘%' OR LOWER(COALESCE(theme,'')) LIKE '%daily%'
+       )`,
+      [TAROT_APP_ID]
+    );
+    const { rows: byDay } = await pool.query(
+      `SELECT reading_date::text AS day, COUNT(*)::int AS cnt
+       FROM lovetype_tarot_readings
+       WHERE app_id = $1 AND reading_date IS NOT NULL
+       GROUP BY reading_date
+       ORDER BY reading_date DESC
+       LIMIT 14`,
+      [TAROT_APP_ID]
+    );
+    res.json({
+      success: true,
+      readings_total: tc[0].c,
+      users_total: uc[0].c,
+      push_tokens: pc[0].c,
+      subscribed_active: sc[0].c,
+      readings_romance: romanceC[0].c,
+      readings_daily: dailyC[0].c,
+      readings_by_day: byDay,
+    });
+  } catch (err) {
+    console.error('[v1 admin/stats]', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+router.get('/admin/wallets', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const lim = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id, balance, is_subscribed, sub_expires_at, updated_at
+       FROM lovetype_tarot_wallet
+       WHERE app_id = $1
+       ORDER BY updated_at DESC
+       LIMIT $2`,
+      [TAROT_APP_ID, lim]
+    );
+    res.json({ success: true, items: rows });
+  } catch (err) {
+    console.error('[v1 admin/wallets]', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+router.get('/admin/charges', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const lim = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, user_id, product_id, is_subscription, created_at
+       FROM lovetype_tarot_charge_log
+       WHERE app_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [TAROT_APP_ID, lim]
+    );
+    res.json({ success: true, items: rows });
+  } catch (err) {
+    console.error('[v1 admin/charges]', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+router.get('/admin/settings', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const row = await getTarotSettings();
+    res.json({ success: true, settings: row });
+  } catch (err) {
+    console.error('[v1 admin/settings GET]', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+router.patch('/admin/settings', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const b = req.body || {};
+  const clamp = (n, lo, hi, fallback) => {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return fallback;
+    return Math.min(hi, Math.max(lo, Math.floor(v)));
+  };
+  try {
+    const cur = await getTarotSettings();
+    const cooldownDaily = clamp(
+      b.cooldown_daily_sec,
+      60,
+      864000,
+      cur.cooldown_daily_sec
+    );
+    const cooldownRomance = clamp(
+      b.cooldown_romance_sec,
+      60,
+      864000,
+      cur.cooldown_romance_sec
+    );
+    const deckBasic =
+      b.deck_basic_enabled === undefined
+        ? cur.deck_basic_enabled
+        : Boolean(b.deck_basic_enabled);
+    const deckLv =
+      b.deck_low_vision_enabled === undefined
+        ? cur.deck_low_vision_enabled
+        : Boolean(b.deck_low_vision_enabled);
+    const deckWb =
+      b.deck_webtoon_enabled === undefined
+        ? cur.deck_webtoon_enabled
+        : Boolean(b.deck_webtoon_enabled);
+
+    await pool.query(
+      `INSERT INTO lovetype_tarot_settings (
+         app_id, cooldown_daily_sec, cooldown_romance_sec,
+         deck_basic_enabled, deck_low_vision_enabled, deck_webtoon_enabled, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (app_id) DO UPDATE SET
+         cooldown_daily_sec = EXCLUDED.cooldown_daily_sec,
+         cooldown_romance_sec = EXCLUDED.cooldown_romance_sec,
+         deck_basic_enabled = EXCLUDED.deck_basic_enabled,
+         deck_low_vision_enabled = EXCLUDED.deck_low_vision_enabled,
+         deck_webtoon_enabled = EXCLUDED.deck_webtoon_enabled,
+         updated_at = NOW()`,
+      [
+        TAROT_APP_ID,
+        cooldownDaily,
+        cooldownRomance,
+        deckBasic,
+        deckLv,
+        deckWb,
+      ]
+    );
+    const row = await getTarotSettings();
+    res.json({ success: true, settings: row });
+  } catch (err) {
+    console.error('[v1 admin/settings PATCH]', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
