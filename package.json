@@ -5,9 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node scripts/migrate.js && node src/index.js",
-    "dev": "nodemon src/index.js",
+    "dev": "node --watch src/index.js",
     "db:init": "node scripts/migrate.js sql/init.sql",
-    "db:tarot": "node scripts/migrate.js"
+    "db:tarot": "node scripts/migrate.js",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +24,9 @@
     "pg": "^8.20.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "pg-mem": "^3.0.14"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
