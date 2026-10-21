@@ -10,6 +10,7 @@ async function generateTarotStory(userPrompt) {
 
   const response = await fetch(DEEPSEEK_API_URL, {
     method: 'POST',
+    signal: AbortSignal.timeout(60000),
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,

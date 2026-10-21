@@ -13,7 +13,7 @@ function resolveSqlPaths() {
     return [p];
   }
   const sqlDir = path.resolve(__dirname, "..", "sql");
-  return ["tarot_v1.sql", "tarot_settings.sql"].map((f) =>
+  return ["tarot_v1.sql", "tarot_settings.sql", "tarot_security.sql"].map((f) =>
     path.join(sqlDir, f)
   );
 }
